@@ -53,7 +53,7 @@ class needs(QuietMarkDecorator, Enum):  # noqa: N801
     req: Requirement
 
     scanpy2 = "scanpy[scanpy2]"
-    anndata_acc = "anndata>=0.13.0rc3"
+    anndata_acc = "anndata>=0.13"
 
     colour = "colour-science"
     dask = auto()
@@ -68,6 +68,7 @@ class needs(QuietMarkDecorator, Enum):  # noqa: N801
     skimage = "scikit-image"
     skmisc = "scikit-misc"
     zarr = auto()
+    illico = auto()
     # external
     bbknn = auto()
     harmony = "harmonyTS"
