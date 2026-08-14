@@ -100,3 +100,11 @@ def __getattr__(name: str) -> Any:
         return version("scanpy")
 
     raise AttributeError
+
+
+# Add archetype to imports in src/scanpy/tools/__init__.py
+from scanpy.tools._archetype import archetype
+
+__all__ = [
+    "archetype",
+]

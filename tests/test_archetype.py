@@ -10,23 +10,24 @@ import scanpy as sc
 from scanpy.tools._archetype import compute_hexagon_coordinates
 
 # ── Test data and model paths ─────────────────────────────────────────────────
+# TEST_DATA: Dynamically locate the _data directory relative to this test script.
+# Ensures portability across Windows, macOS, and Linux without local hardcoded paths.
+TEST_DATA = Path(__file__).parent / "_data"
+
 # DATA_PATH: AnnData object containing clean tumor cells with sample_type labels
 # ("brain_met" or "primary"). Must contain the archetype gene subset in var_names.
-#
+DATA_PATH = TEST_DATA / "tumor_sub_corey_clean.h5ad"
+
 # ARCH_PATH, S_PATH, GENES_PATH: Pre-trained archetypal analysis model files.
 # - Archetypes.csv: W matrix (780 genes x 6 archetypes)
 # - S.csv: Gene reweighting factors (780 values)
 # - Genes.csv: Gene names corresponding to the 780 archetype genes
-#
-# To use your own model files, update these paths accordingly.
-DATA_PATH = Path("C:/content/data/tumor_sub_corey_clean.h5ad")
-ARCH_PATH = Path(
-    "C:/Users/vikes/OneDrive/for-vikesh-saurish/for-vikesh-saurish/Archetypes.csv"
-)
-S_PATH = Path("C:/Users/vikes/OneDrive/for-vikesh-saurish/for-vikesh-saurish/S.csv")
-GENES_PATH = Path(
-    "C:/Users/vikes/OneDrive/for-vikesh-saurish/for-vikesh-saurish/Genes.csv"
-)
+ARCH_PATH = TEST_DATA / "Archetypes.csv"
+S_PATH = TEST_DATA / "S.csv"
+GENES_PATH = TEST_DATA / "Genes.csv"
+
+# EXPECTED_OUTPUT_PATH: Baseline matrix for exact answer match validation.
+EXPECTED_OUTPUT_PATH = TEST_DATA / "expected_archetypes.npy"
 
 
 def load_model(adata):
@@ -68,21 +69,39 @@ def test_archetype_real_tumor_pipeline():
     - Archetype scores are computed with the correct shape
     - All scores are non-negative
     - Scores sum to approximately 1 per cell (simplex constraint)
+    - Automatically creates expected_archetypes.npy if missing, or validates
+      against it if present (Charles' requirement).
     """
     adata = sc.read_h5ad(DATA_PATH)
     print("Loaded:", adata.shape)
     w, s, genes_present = load_model(adata)
     print(f"Model genes matched: {len(genes_present)}/780")
+
     assert adata.n_vars == len(genes_present)
     assert w.shape == (len(genes_present), 6)
     assert s.shape == (len(genes_present),)
+
+    # Set random seed for exact cross-machine reproducibility
+    np.random.seed(42) # noqa: NPY002
     sc.tl.archetype(adata, w=w, s=s)
+
     assert "archetypes" in adata.obsm
     arch = adata.obsm["archetypes"]
     print("Archetype matrix:", arch.shape)
+
     assert arch.shape == (adata.n_obs, 6)
     assert np.all(arch >= 0)
     np.testing.assert_allclose(arch.sum(axis=1), np.ones(adata.n_obs), atol=1e-3)
+
+    # Charles' requirement: Auto-generate baseline on first run, compare on subsequent runs
+    if not EXPECTED_OUTPUT_PATH.exists():
+        print(f"\n[INFO] Generating baseline output array to: {EXPECTED_OUTPUT_PATH}")
+        np.save(EXPECTED_OUTPUT_PATH, arch)
+        print("[INFO] Baseline expected_archetypes.npy created successfully.")
+    else:
+        print(f"\n[INFO] Validating against existing baseline: {EXPECTED_OUTPUT_PATH}")
+        expected_arch = np.load(EXPECTED_OUTPUT_PATH)
+        np.testing.assert_allclose(arch, expected_arch, rtol=1e-5, atol=1e-5)
 
 
 def test_hexagon_projection_real_data():
@@ -95,7 +114,10 @@ def test_hexagon_projection_real_data():
     """
     adata = sc.read_h5ad(DATA_PATH)
     w, s, _ = load_model(adata)
+
+    np.random.seed(42) # noqa: NPY002
     sc.tl.archetype(adata, w=w, s=s)
+
     coor1, coor2 = compute_hexagon_coordinates(adata.obsm["archetypes"])
     assert coor1.shape == (adata.n_obs,)
     assert coor2.shape == (adata.n_obs,)
@@ -120,6 +142,8 @@ def test_archetype_biological_relationships():
     """
     adata = sc.read_h5ad(DATA_PATH)
     w, s, _ = load_model(adata)
+
+    np.random.seed(42) # noqa: NPY002
     sc.tl.archetype(adata, w=w, s=s)
 
     archetype_names = [
