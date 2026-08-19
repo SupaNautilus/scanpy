@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import csv
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -9,6 +8,8 @@ from scipy.sparse import csr_matrix  # noqa: TID251
 
 if TYPE_CHECKING:
     from anndata import AnnData
+
+_PACKAGE_DATA = Path(__file__).parent / "_data"
 
 
 def archetype(
@@ -23,7 +24,10 @@ def archetype(
         s=s,
     )
 
-    adata.obsm["archetypes"] = archs.toarray().transpose()
+    if hasattr(archs, "toarray"):
+        archs = archs.toarray()
+
+    adata.obsm["archetypes"] = archs.T
 
 
 def archetype_computer(
@@ -50,31 +54,25 @@ def archetype_computer(
     """
     # Load pretrained archetype weights if not supplied.
     if w is None:
-        wlist = []
-
-        with Path(
-            "/Users/kocherc/Documents/GitHub/code/MATLAB/"
-            "Cancer_Archetypes-main/Outputs/Archetypes.csv"
-        ).open() as file:
-            csv_reader = csv.reader(file)
-
-            wlist.extend([float(value) for value in row] for row in csv_reader)
-
-        w = csr_matrix(np.array(wlist))
+        default_w_path = _PACKAGE_DATA / "Archetypes.csv"
+        if not default_w_path.exists():
+            msg = (
+                "Archetype matrix `w` was not provided and default "
+                f"file not found at {default_w_path}"
+            )
+            raise ValueError(msg)
+        w = csr_matrix(np.loadtxt(default_w_path, delimiter=","))
 
     # Load pretrained gene scaling factors if not supplied.
     if s is None:
-        slist = []
-
-        with Path(
-            "/Users/kocherc/Documents/GitHub/code/MATLAB/"
-            "Cancer_Archetypes-main/Outputs/S.csv"
-        ).open() as file:
-            csv_reader = csv.reader(file)
-
-            slist.extend(float(row[0]) for row in csv_reader)
-
-        s = np.array(slist)
+        default_s_path = _PACKAGE_DATA / "S.csv"
+        if not default_s_path.exists():
+            msg = (
+                "Scaling vector `s` was not provided and default "
+                f"file not found at {default_s_path}"
+            )
+            raise ValueError(msg)
+        s = np.loadtxt(default_s_path, delimiter=",")
 
     # Reweight genes.
     dd = data / s[:, None]
@@ -120,18 +118,28 @@ def nmf_new_weights(
 
     _, n = v.shape
 
-    # Initialize archetype contribution matrix.
-    h = csr_matrix(rng.random((k, n)) + eps)
+    # Initialize dense archetype matrix.
+    h = rng.random((k, n)) + eps
+
+    # Pre-calculate W^T * V outside the loop for speed
+    wv = w.T.dot(v)
+    if hasattr(wv, "toarray"):
+        wv = wv.toarray()
+
+    # Pre-calculate W^T * W outside the loop
+    w_tw = w.T.dot(w)
+    if hasattr(w_tw, "toarray"):
+        w_tw = w_tw.toarray()
 
     # Multiplicative NMF update while keeping W fixed.
     for _ in range(n_iter):
-        wv = w.transpose().dot(v)
-        wwh = w.transpose().dot(w.dot(h))
+        wwh = w_tw.dot(h) + eps
+        h *= wv / wwh
 
-        h = h.multiply(wv / wwh)
-
-        # Normalize archetype contributions.
-        h = h / h.sum(axis=0)
+        # Normalize archetype contributions per cell.
+        h_sum = h.sum(axis=0, keepdims=True)
+        h_sum[h_sum == 0] = 1.0
+        h /= h_sum
 
     return h
 
@@ -152,7 +160,10 @@ def add_archetypes_to_adata(
         s=s,
     )
 
-    adata.obsm["archetypes"] = archs.toarray().transpose()
+    if hasattr(archs, "toarray"):
+        archs = archs.toarray()
+
+    adata.obsm["archetypes"] = archs.T
 
 
 def compute_hexagon_coordinates(
