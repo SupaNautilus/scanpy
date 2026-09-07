@@ -9,7 +9,6 @@ from scipy.sparse import csr_matrix  # noqa: TID251
 import scanpy as sc
 from scanpy.tools._archetype import compute_hexagon_coordinates
 
-# ── Test data and model paths ─────────────────────────────────────────────────
 # TEST_DATA: Dynamically locate the _data directory relative to this test script.
 # Ensures portability across Windows, macOS, and Linux without local hardcoded paths.
 TEST_DATA = Path(__file__).parent / "_data"
@@ -93,7 +92,7 @@ def test_archetype_real_tumor_pipeline():
     assert np.all(arch >= 0)
     np.testing.assert_allclose(arch.sum(axis=1), np.ones(adata.n_obs), atol=1e-3)
 
-    # Charles' requirement: Auto-generate baseline on first run, compare on subsequent runs
+    # Auto-generate baseline on first run, compare on subsequent runs
     if not EXPECTED_OUTPUT_PATH.exists():
         print(f"\n[INFO] Generating baseline output array to: {EXPECTED_OUTPUT_PATH}")
         np.save(EXPECTED_OUTPUT_PATH, arch)
