@@ -29,7 +29,7 @@ def metric(request: pytest.FixtureRequest):
 
 
 @pytest.fixture(params=["single-threaded", "multi-threaded"])
-def _threading(request: pytest.FixtureRequest) -> Generator[None, None, None]:
+def _threading(request: pytest.FixtureRequest) -> Generator[None]:
     if request.param == "single-threaded":
         with threadpoolctl.threadpool_limits(limits=1):
             yield
@@ -309,7 +309,10 @@ def test_modularity_adj_errors(labels: object, is_directed: object, pat: str) ->
 
 
 @needs.igraph
-@pytest.mark.parametrize("preset", [sc.Preset.ScanpyV1, sc.Preset.ScanpyV2Preview])
+@pytest.mark.parametrize(
+    "preset",
+    [sc.Preset.ScanpyV1, pytest.param(sc.Preset.ScanpyV2Preview, marks=needs.scanpy2)],
+)
 def test_modularity_adata(
     monkeypatch: pytest.MonkeyPatch, subtests: pytest.Subtests, preset: sc.Preset
 ) -> None:

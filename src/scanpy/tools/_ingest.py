@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import contextlib
 from collections.abc import MutableMapping
 from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
+from fast_array_utils.stats import mean
 from sklearn.utils import check_random_state
 
 from .. import logging as logg
@@ -19,17 +21,19 @@ from .._utils import (
 )
 from .._utils._doctests import doctest_skipif
 from .._utils.random import _legacy_random_state, _LegacyRng
-from ..neighbors import FlatTree
+from ..get import _check_mask
+from ..get.get import MultiAcc, _ref_from_json, _rep_from_json
+from ._utils import _choose_representation_compat
 
 if TYPE_CHECKING:
-    from collections.abc import Generator, Iterable
+    from collections.abc import Iterable
 
     from anndata import AnnData
     from pynndescent import NNDescent
     from umap import UMAP
 
     from .._keys import _EmbeddingKeys
-    from ..neighbors import RPForestDict
+    from ..get.get import RepAcc
 
 
 @doctest_skipif(reason="illustrative short example but not runnable")
@@ -147,27 +151,6 @@ def ingest(
     return ing.to_adata(inplace=inplace)
 
 
-def _rp_forest_generate(
-    rp_forest_dict: RPForestDict,
-) -> Generator[FlatTree, None, None]:
-    props = FlatTree._fields
-    num_trees = len(rp_forest_dict[props[0]]["start"]) - 1
-
-    for i in range(num_trees):
-        tree = []
-        for prop in props:
-            start = rp_forest_dict[prop]["start"][i]
-            end = rp_forest_dict[prop]["start"][i + 1]
-            tree.append(rp_forest_dict[prop]["data"][start:end])
-        yield FlatTree(*tree)
-
-    tree = []
-    for prop in props:
-        start = rp_forest_dict[prop]["start"][num_trees]
-        tree.append(rp_forest_dict[prop]["data"][start:])
-    yield FlatTree(*tree)
-
-
 class _DimDict(MutableMapping):
     def __init__(self, dim, axis=0, vals=None):
         self._data = {}
@@ -223,7 +206,7 @@ class Ingest:
     _rng: np.random.Generator | None
     # neighbors
     _rep: np.ndarray
-    _use_rep: str
+    _use_rep: RepAcc | str
     _metric: str
     _metric_kwds: dict[str, object]
     _n_neighbors: int
@@ -233,8 +216,9 @@ class Ingest:
     _umap: UMAP
     # pca
     _pca_centered: bool
-    _pca_mask: str | None
+    _pca_mask: np.ndarray | None
     _pca_basis: np.ndarray
+    _pca_mean: np.ndarray | None
     # adata
     _adata_ref: AnnData
     _adata_new: AnnData | None
@@ -320,8 +304,10 @@ class Ingest:
         self._n_neighbors = neighbors["params"]["n_neighbors"]
 
         if "use_rep" in neighbors["params"]:
-            self._use_rep = neighbors["params"]["use_rep"]
-            self._rep = adata.X if self._use_rep == "X" else adata.obsm[self._use_rep]
+            self._use_rep = _rep_from_json(neighbors["params"]["use_rep"])
+            self._rep = _choose_representation_compat(
+                adata, use_rep=self._use_rep, n_pcs=None
+            )
         elif "n_pcs" in neighbors["params"]:
             self._use_rep = "X_pca"
             self._n_pcs = neighbors["params"]["n_pcs"]
@@ -340,23 +326,28 @@ class Ingest:
 
     def _init_pca(self, adata: AnnData) -> None:
         self._pca_centered = adata.uns["pca"]["params"]["zero_center"]
-        self._pca_mask = adata.uns["pca"]["params"]["mask_var"]
+        self._pca_mask = _check_mask(
+            adata, _ref_from_json(adata.uns["pca"]["params"]["mask_var"]), "var"
+        )
 
-        if self._pca_mask and self._pca_mask not in adata.var.columns:
-            msg = f"Did not find `adata.var[{self._pca_mask!r}']`."
-            raise ValueError(msg)
-
-        if self._pca_mask:
-            self._pca_basis = adata.varm["PCs"][adata.var[self._pca_mask]]
+        if self._pca_mask is not None:
+            self._pca_basis = adata.varm["PCs"][self._pca_mask]
         else:
             self._pca_basis = adata.varm["PCs"]
+
+        x = adata.X
+        if self._pca_mask is not None:
+            x = x[:, self._pca_mask]
+        self._pca_mean = (
+            np.asarray(mean(x, axis=0)).ravel() if self._pca_centered else None
+        )
 
     def __init__(
         self,
         adata: AnnData,
         neighbors_key: str | None = None,
         *,
-        rng: np.random.Generator | None | Default = Default(
+        rng: np.random.Generator | Default | None = Default(
             "adata.uns['umap']['params'].get('random_state', 0)"
         ),
     ) -> None:
@@ -402,22 +393,23 @@ class Ingest:
 
     def _pca(self, n_pcs=None):
         x = self._adata_new.X
-        x = x.toarray() if isinstance(x, CSBase) else x.copy()
-        if self._pca_mask:
-            x = x[:, self._adata_ref.var["highly_variable"]]
-        if self._pca_centered:
-            x -= x.mean(axis=0)
-        x_pca = np.dot(x, self._pca_basis[:, :n_pcs])
+        if self._pca_mask is not None:
+            x = x[:, self._pca_mask]
+        basis = self._pca_basis[:, :n_pcs]
+        x_pca = np.asarray(x @ basis)
+        if self._pca_mean is not None:
+            x_pca -= self._pca_mean @ basis
         return x_pca
 
     def _same_rep(self):
         adata = self._adata_new
         if self._n_pcs is not None:
             return self._pca(self._n_pcs)
-        if self._use_rep == "X":
-            return adata.X
-        if self._use_rep in adata.obsm:
-            return adata.obsm[self._use_rep]
+        # fall back to `.X` if the representation is missing in the new object
+        with contextlib.suppress(KeyError, ValueError):
+            return _choose_representation_compat(
+                adata, use_rep=self._use_rep, n_pcs=None
+            )
         return adata.X
 
     def fit(self, adata_new: AnnData) -> None:
@@ -550,11 +542,14 @@ class Ingest:
                     self._obsm[key],
                 ))
 
-        if self._use_rep not in ("X_pca", "X"):
-            adata.obsm[self._use_rep] = np.vstack((
-                self._adata_ref.obsm[self._use_rep],
-                self._obsm["rep"],
-            ))
+        pca_keys = _existing_preset_keys(self._adata_ref, "pca")
+        skip = {"X", pca_keys.obsm if pca_keys else "X_pca"}
+        match self._use_rep:
+            case MultiAcc(dim="obs", k=key) | str(key) if key not in skip:
+                adata.obsm[key] = np.vstack((
+                    self._adata_ref.obsm[key],
+                    self._obsm["rep"],
+                ))
 
         if keys := _existing_preset_keys(self._adata_ref, "umap"):
             adata.uns[keys.uns] = self._adata_ref.uns[keys.uns]
