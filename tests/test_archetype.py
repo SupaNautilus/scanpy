@@ -81,7 +81,7 @@ def test_archetype_real_tumor_pipeline():
     assert s.shape == (len(genes_present),)
 
     # Set random seed for exact cross-machine reproducibility
-    np.random.seed(42) # noqa: NPY002
+    np.random.seed(42)  # noqa: NPY002
     sc.tl.archetype(adata, w=w, s=s)
 
     assert "archetypes" in adata.obsm
@@ -114,7 +114,7 @@ def test_hexagon_projection_real_data():
     adata = sc.read_h5ad(DATA_PATH)
     w, s, _ = load_model(adata)
 
-    np.random.seed(42) # noqa: NPY002
+    np.random.seed(42)  # noqa: NPY002
     sc.tl.archetype(adata, w=w, s=s)
 
     coor1, coor2 = compute_hexagon_coordinates(adata.obsm["archetypes"])
@@ -142,7 +142,7 @@ def test_archetype_biological_relationships():
     adata = sc.read_h5ad(DATA_PATH)
     w, s, _ = load_model(adata)
 
-    np.random.seed(42) # noqa: NPY002
+    np.random.seed(42)  # noqa: NPY002
     sc.tl.archetype(adata, w=w, s=s)
 
     archetype_names = [
